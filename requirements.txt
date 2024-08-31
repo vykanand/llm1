@@ -1,4 +1,6 @@
 flask
 transformers
+datasets
+accelerate
 torch
 flask-cors

@@ -2,15 +2,25 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import torch
+import os
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Load pre-trained model and tokenizer
-model_name = "gpt2-medium"
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-model = GPT2LMHeadModel.from_pretrained(model_name)
+# Determine the cache directory
+cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
+
+# Load tokenizer and model from the cache
+model_name = "gpt2"
+tokenizer = GPT2Tokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+model = GPT2LMHeadModel.from_pretrained(model_name, cache_dir=cache_dir)
+
+# Load fine-tuned model if it exists
+fine_tuned_model_dir = os.path.join(cache_dir, 'fine-tuned-gpt2')
+if os.path.isdir(fine_tuned_model_dir):
+    model = GPT2LMHeadModel.from_pretrained(fine_tuned_model_dir)
+    tokenizer = GPT2Tokenizer.from_pretrained(fine_tuned_model_dir)
 
 # Set pad_token_id to eos_token_id if it is not set
 if tokenizer.pad_token is None:
@@ -34,6 +44,10 @@ def generate_text(prompt, max_tokens):
     # Decode the generated text
     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     
+    # Remove the prompt from the start of the generated text if present
+    if generated_text.startswith(prompt):
+        generated_text = generated_text[len(prompt):].strip()
+
     return generated_text
 
 @app.route('/predict', methods=['POST'])
