@@ -4,15 +4,16 @@ FROM continuumio/miniconda3
 # Set the working directory
 WORKDIR /app
 
-# Copy environment.yml to the container
+# Copy environment.yml and requirements.txt first
 COPY environment.yml /app/
+COPY requirements.txt /app/
 
-# Create and activate the Conda environment and install dependencies
-RUN conda env create --file /app/environment.yml && \
+# Create the Conda environment
+RUN conda env create -f /app/environment.yml --verbose && \
     conda clean --all --yes
 
-# Set the environment to be used for subsequent commands
-SHELL ["conda", "run", "--name", "myenv", "/bin/bash", "-c"]
+# Install Python dependencies
+RUN ls -l /app/requirements.txt && pip install -r requirements.txt --verbose
 
 # Copy the rest of the application code
 COPY app.py /app/
@@ -21,4 +22,4 @@ COPY app.py /app/
 EXPOSE 5000
 
 # Define the command to run the application
-CMD ["python", "app.py"]
+CMD ["conda", "run", "--name", "myenv", "python", "app.py"]

@@ -43,13 +43,16 @@ def check_data_format(dataset_path):
 
         print("Data format is valid.")
         return data
-    except Exception as e:
-        print(f"Error checking data format: {e}")
-        return None
+    except FileNotFoundError:
+        print(f"File not found: {dataset_path}")
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON from file: {dataset_path}")
+    except ValueError as e:
+        print(f"Data format error: {e}")
+    return None
 
 def check_tokenization(tokenizer, data):
     try:
-        # Test with a sample
         sample = data[0]  # Take the first item as a sample
         inputs = tokenizer(sample['question'], return_tensors="pt", padding=True, truncation=True)
         targets = tokenizer(sample['answer'], return_tensors="pt", padding=True, truncation=True)
@@ -80,7 +83,6 @@ def prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None)
     if subset_size:
         data = data[:subset_size]  # Limit to subset_size elements for preliminary tuning
     
-    # Convert list of dictionaries to DataFrame and then to Dataset
     df = pd.DataFrame(data)
     dataset = Dataset.from_pandas(df)
     
@@ -94,17 +96,19 @@ def prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None)
     
     tokenized_dataset = dataset.map(preprocess_function, batched=True)
 
-    # Define training arguments
+    # Define training arguments with mixed precision and wandb disabled
     training_args = TrainingArguments(
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         output_dir=os.path.join(cache_dir, 'results'),
-        num_train_epochs=1 if subset_size else 3,  # Use fewer epochs for preliminary tuning
+        num_train_epochs=1 if subset_size else 3,
         logging_dir=os.path.join(cache_dir, 'logs'),
         logging_steps=10,
         save_steps=10_000,
         save_total_limit=2,
-        evaluation_strategy="epoch"
+        evaluation_strategy="epoch",
+        report_to="none",  # Disable wandb and other report tools
+        fp16=True  # Enable mixed precision training
     )
 
     # Define Trainer
@@ -112,21 +116,24 @@ def prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None)
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
-        eval_dataset=tokenized_dataset  # Use same data for evaluation; adjust as needed
+        eval_dataset=tokenized_dataset
     )
 
-    # Start training
-    trainer.train()
+    try:
+        # Start training
+        trainer.train()
 
-    # Save fine-tuned model
-    fine_tuned_model_dir = os.path.join(cache_dir, 'fine-tuned-gpt2')
-    model.save_pretrained(fine_tuned_model_dir)
-    tokenizer.save_pretrained(fine_tuned_model_dir)
-    print(f"Fine-tuned model saved to {fine_tuned_model_dir}")
+        # Save fine-tuned model
+        fine_tuned_model_dir = os.path.join(cache_dir, 'fine-tuned-gpt2')
+        model.save_pretrained(fine_tuned_model_dir)
+        tokenizer.save_pretrained(fine_tuned_model_dir)
+        print(f"Fine-tuned model saved to {fine_tuned_model_dir}")
+    except Exception as e:
+        print(f"Error during training or saving the model: {e}")
 
 def main():
     model_name = "gpt2"
-    dataset_path = 'tuning.json'
+    dataset_path = '/kaggle/input/tuning/tuning.json'
     subset_size = 10  # Define the number of samples for preliminary tuning
 
     cache_dir = setup_environment()

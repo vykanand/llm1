@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Determine the cache directory
-cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
+cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
 
 # Load tokenizer and model from the cache
 model_name = "gpt2"
@@ -27,15 +27,23 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
+# Move model to GPU if available
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
 def generate_text(prompt, max_tokens):
     # Tokenize input with attention mask
     inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, return_attention_mask=True)
     
+    # Move input tensors to the same device as the model
+    input_ids = inputs['input_ids'].to(device)
+    attention_mask = inputs['attention_mask'].to(device)
+    
     # Generate text
     outputs = model.generate(
-        input_ids=inputs['input_ids'],
-        attention_mask=inputs['attention_mask'],
-        max_length=max_tokens + len(inputs['input_ids'][0]),  # Ensure that total length does not exceed token limit
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_length=max_tokens + input_ids.size(-1),  # Ensure that total length does not exceed token limit
         num_return_sequences=1,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
