@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        #response {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Text Generation App</h1>
+    <form id="text-form">
+        <label for="text-input">Enter your prompt:</label><br>
+        <textarea id="text-input" rows="4" cols="50" placeholder="Enter Question"></textarea><br><br>
+        <button type="button" onclick="sendRequest()">Submit</button>
+    </form>
+    <div id="response">
+        <h2>Generated Text:</h2>
+        <p id="generated-text"></p>
+    </div>
+
+    <script>
+        function getQueryParam(param) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(param);
+        }
+
+        async function sendRequest() {
+            const inputText = document.getElementById('text-input').value;
+            const maxTokens = getQueryParam('tokens') || '50';  // Default to 50 if not specified
+
+            if (!inputText) {
+                alert('Please enter a prompt!');
+                return;
+            }
+
+            try {
+                const response = await fetch(`http://localhost:5000/predict?tokens=${maxTokens}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        "text": inputText
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+
+                const data = await response.json();
+                document.getElementById('generated-text').innerText = data.generated_text;
+            } catch (error) {
+                console.error('There was a problem with the fetch operation:', error);
+                document.getElementById('generated-text').innerText = 'Error occurred while fetching the data.';
+            }
+        }
+    </script>
+</body>
+
+</html>
