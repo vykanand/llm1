@@ -27,13 +27,18 @@ def generate_expanded_data(original_data, num_entries):
             item['question'] + " Please elaborate.",
             item['question'] + " Can you explain further?",
             item['question'] + " What more can you tell about this?",
-            item['question'] + " Could you provide more details?"
+            item['question'] + " Could you provide more details?",
+            "What is the detailed process of " + item['question'],
+            "Can you describe the " + item['question'].lower() + " in more detail?",
+            "How does " + item['question'].lower() + " impact dogs?"
         ]
         
         answer_variations = [
-            item['answer'] + " More details: [Additional information].",
-            item['answer'] + " Also, consider this: [Extra context].",
-            item['answer'] + " Further insights include: [Supplementary details]."
+            item['answer'] + " Here’s a more detailed explanation: [Additional information].",
+            item['answer'] + " For a deeper understanding: [Extra context].",
+            item['answer'] + " More insights include: [Supplementary details].",
+            item['answer'] + " To elaborate further: [Expanded context].",
+            item['answer'] + " Additionally: [More in-depth information]."
         ]
         
         question = random.choice(question_variations)
@@ -49,7 +54,7 @@ def generate_expanded_data(original_data, num_entries):
     return expanded_data
 
 # Generate dataset with 1000 entries
-expanded_dataset = generate_expanded_data(original_data, 1000)
+expanded_dataset = generate_expanded_data(original_data, 3000)
 
 # Save to JSON file
 with open('expanded_dataset.json', 'w') as f:

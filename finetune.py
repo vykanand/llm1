@@ -1,9 +1,10 @@
 import os
 import json
 import pandas as pd
-from transformers import GPT2Tokenizer, GPT2LMHeadModel, Trainer, TrainingArguments
-import torch
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, Trainer, TrainingArguments, DataCollatorForLanguageModeling
 from datasets import Dataset
+from peft import get_peft_model, LoraConfig
+import torch
 
 def setup_environment():
     cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
@@ -14,13 +15,20 @@ def setup_environment():
 def check_model_and_tokenizer(model_name):
     try:
         tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-        model = GPT2LMHeadModel.from_pretrained(model_name)
         
-        # Set pad_token_id if it is not set
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
             tokenizer.pad_token_id = tokenizer.eos_token_id
-            print(f"Pad token set to EOS token.")
+            print("Pad token set to EOS token.")
+        
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+        
+        lora_config = LoraConfig(
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.1
+        )
+        model = get_peft_model(model, lora_config)
         
         print(f"Model and tokenizer for '{model_name}' loaded successfully.")
         return tokenizer, model
@@ -47,78 +55,81 @@ def check_data_format(dataset_path):
         print(f"Error checking data format: {e}")
         return None
 
-def check_tokenization(tokenizer, data):
-    try:
-        # Test with a sample
-        sample = data[0]  # Take the first item as a sample
-        inputs = tokenizer(sample['question'], return_tensors="pt", padding=True, truncation=True)
-        targets = tokenizer(sample['answer'], return_tensors="pt", padding=True, truncation=True)
-        
-        print(f"Sample input IDs: {inputs['input_ids']}")
-        print(f"Sample attention mask: {inputs['attention_mask']}")
-        print(f"Sample target IDs: {targets['input_ids']}")
-        return True
-    except Exception as e:
-        print(f"Error in tokenization: {e}")
-        return False
-
-def check_model_config(model):
-    try:
-        config = model.config
-        print(f"Model configuration: {config}")
-        
-        if not hasattr(config, 'max_position_embeddings'):
-            raise ValueError("Model configuration is missing 'max_position_embeddings'.")
-        
-        print("Model configuration is valid.")
-        return True
-    except Exception as e:
-        print(f"Error checking model configuration: {e}")
-        return False
-
-def prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None):
-    if subset_size:
-        data = data[:subset_size]  # Limit to subset_size elements for preliminary tuning
+def preprocess_function(examples, tokenizer, max_length=512):
+    # Tokenize questions and answers with consistent padding and truncation
+    inputs = tokenizer(examples['question'], max_length=max_length, truncation=True, padding='max_length')
+    targets = tokenizer(examples['answer'], max_length=max_length, truncation=True, padding='max_length')
     
-    # Convert list of dictionaries to DataFrame and then to Dataset
+    # Ensure consistent length
+    model_inputs = {k: torch.tensor(v) for k, v in inputs.items()}
+    model_inputs['labels'] = torch.tensor(targets['input_ids'])
+    
+    return model_inputs
+
+def preprocess_and_train_model(tokenizer, model, data, cache_dir, hyperparameters=None):
+    if hyperparameters is None:
+        hyperparameters = {
+            'batch_size': 8,
+            'num_epochs': 5,
+            'learning_rate': 2e-5,
+            'warmup_steps': 1000,
+            'weight_decay': 0.01,
+            'logging_steps': 100,
+            'save_steps': 5000,
+            'eval_steps': 1000
+        }
+
     df = pd.DataFrame(data)
     dataset = Dataset.from_pandas(df)
     
-    def preprocess_function(examples):
-        inputs = examples['question']
-        targets = examples['answer']
-        model_inputs = tokenizer(inputs, max_length=512, truncation=True, padding='max_length')
-        labels = tokenizer(targets, max_length=512, truncation=True, padding='max_length')
-        model_inputs['labels'] = labels['input_ids']
-        return model_inputs
-    
-    tokenized_dataset = dataset.map(preprocess_function, batched=True)
+    # Tokenize and preprocess data
+    tokenized_dataset = dataset.map(lambda x: preprocess_function(x, tokenizer), batched=True, remove_columns=['question', 'answer'])
+
+    # Split dataset into training and validation sets
+    split = tokenized_dataset.train_test_split(test_size=0.1)
+    train_dataset = split['train']
+    eval_dataset = split['test']
 
     # Define training arguments
     training_args = TrainingArguments(
-        per_device_train_batch_size=2,
-        per_device_eval_batch_size=2,
+        per_device_train_batch_size=hyperparameters.get('batch_size', 8),
+        per_device_eval_batch_size=hyperparameters.get('batch_size', 8),
         output_dir=os.path.join(cache_dir, 'results'),
-        num_train_epochs=1 if subset_size else 3,  # Use fewer epochs for preliminary tuning
+        num_train_epochs=hyperparameters.get('num_epochs', 5),
+        learning_rate=hyperparameters.get('learning_rate', 2e-5),
+        warmup_steps=hyperparameters.get('warmup_steps', 1000),
+        weight_decay=hyperparameters.get('weight_decay', 0.01),
         logging_dir=os.path.join(cache_dir, 'logs'),
-        logging_steps=10,
-        save_steps=10_000,
-        save_total_limit=2,
-        evaluation_strategy="epoch"
+        logging_steps=hyperparameters.get('logging_steps', 100),
+        save_steps=hyperparameters.get('save_steps', 5000),
+        save_total_limit=5,
+        evaluation_strategy="steps",
+        eval_steps=hyperparameters.get('eval_steps', 1000),
+        load_best_model_at_end=True,
+        metric_for_best_model="loss",
+        greater_is_better=False,
+        report_to="tensorboard",
+        fp16=True,
+        remove_unused_columns=False
     )
 
-    # Define Trainer
+    # Initialize the data collator
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False
+    )
+
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_dataset,
-        eval_dataset=tokenized_dataset  # Use same data for evaluation; adjust as needed
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        data_collator=data_collator
     )
 
-    # Start training
     trainer.train()
 
-    # Save fine-tuned model
     fine_tuned_model_dir = os.path.join(cache_dir, 'fine-tuned-gpt2')
     model.save_pretrained(fine_tuned_model_dir)
     tokenizer.save_pretrained(fine_tuned_model_dir)
@@ -126,32 +137,30 @@ def prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None)
 
 def main():
     model_name = "gpt2"
-    dataset_path = 'tuning.json'
-    subset_size = 10  # Define the number of samples for preliminary tuning
-
+    dataset_path = '/kaggle/input/tuning/tuning.json'
     cache_dir = setup_environment()
+    
     tokenizer, model = check_model_and_tokenizer(model_name)
     
     if tokenizer and model:
         data = check_data_format(dataset_path)
         
-        if data and check_tokenization(tokenizer, data) and check_model_config(model):
-            print("All checks passed.")
+        if data:
             preliminary_tuning = input("Do you want to perform preliminary fine-tuning with a subset of the data? (yes/no): ").strip().lower()
             if preliminary_tuning == 'yes':
                 print("Performing preliminary fine-tuning.")
-                prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=subset_size)
+                preprocess_and_train_model(tokenizer, model, data[:10], cache_dir)  # Use subset for preliminary tuning
             
             proceed = input("Do you want to proceed with full fine-tuning? (yes/no): ").strip().lower()
             if proceed == 'yes':
                 print("Proceeding to full fine-tuning.")
-                prepare_and_train_model(tokenizer, model, data, cache_dir, subset_size=None)
+                preprocess_and_train_model(tokenizer, model, data, cache_dir)
             else:
                 print("Fine-tuning aborted.")
         else:
-            print("One or more checks failed. Aborting fine-tuning.")
+            print("Data format is not valid. Aborting.")
     else:
-        print("Model or tokenizer failed to load. Aborting fine-tuning.")
+        print("Model or tokenizer failed to load. Aborting.")
 
 if __name__ == '__main__':
     main()
